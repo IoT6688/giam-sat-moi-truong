@@ -84,32 +84,42 @@ function updateConnectionModeUI(mode) {
 
 function initWebSocket() {
     if (wsRetryCount >= MAX_WS_RETRIES) return; 
-    websocket = new WebSocket(gateway);
     
-    websocket.onopen = function() {
-        isLocalConnected = true;
-        wsRetryCount = 0; 
-        updateConnectionModeUI("local");
-        if (blynkTimer) {
-            clearTimeout(blynkTimer);
-            blynkTimer = null;
-        }
-    };
+    // Đã bọc try...catch vào đây để chống Crash khi chạy trên GitHub Pages
+    try {
+        websocket = new WebSocket(gateway);
+        
+        websocket.onopen = function() {
+            isLocalConnected = true;
+            wsRetryCount = 0; 
+            updateConnectionModeUI("local");
+            if (blynkTimer) {
+                clearTimeout(blynkTimer);
+                blynkTimer = null;
+            }
+        };
 
-    websocket.onclose = function(e) {
-        isLocalConnected = false;
-        wsRetryCount++;
-        if (wsRetryCount === 1) { 
-            updateConnectionModeUI("remote");
-            layDuLieuTuBlynk(); 
-        }
-        setTimeout(initWebSocket, 3000); 
-    };
-    
-    websocket.onmessage = function(event) {
-        var data = JSON.parse(event.data);
-        capNhatGiaoDienTrungTam(data.gas, data.temp, data.hum);
-    };
+        websocket.onclose = function(e) {
+            isLocalConnected = false;
+            wsRetryCount++;
+            if (wsRetryCount === 1) { 
+                updateConnectionModeUI("remote");
+                layDuLieuTuBlynk(); 
+            }
+            setTimeout(initWebSocket, 3000); 
+        };
+        
+        websocket.onmessage = function(event) {
+            var data = JSON.parse(event.data);
+            capNhatGiaoDienTrungTam(data.gas, data.temp, data.hum);
+        };
+    } catch (error) {
+        // Lập tức nhảy vào đây nếu trình duyệt HTTPS chặn WebSocket ws://
+        console.warn("Môi trường HTTPS chặn WebSocket nội bộ. Kích hoạt chuyển nguồn Cloud Blynk...");
+        wsRetryCount = MAX_WS_RETRIES; // Ép dừng vòng lặp tìm WebSocket nội bộ
+        updateConnectionModeUI("remote");
+        layDuLieuTuBlynk(); // Gọi API rút dữ liệu từ đám mây ngay lập tức
+    }
 }
 
 function layDuLieuTuBlynk() {
@@ -183,14 +193,6 @@ function capNhatGiaoDienTrungTam(gasValue, tempValue, humValue) {
     } else {
         humCard.classList.remove("danger"); 
         humStatus.innerHTML = "An toàn";
-    }
-}
-
-function resetWifi(){
-    if(confirm("Bạn có chắc chắn muốn xóa WiFi cũ không?")) {
-        fetch("/resetwifi").then(()=>{
-            alert("Đã gửi lệnh xóa WiFi!\nHãy kết nối lại vào mạng ESP32_SETUP để cấu hình.");
-        });
     }
 }
 
