@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Giám sát môi trường</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+<style>
+ body{ margin:0; font-family:'Poppins',sans-serif; background:#F5F9FF; }
+ .container{ display:flex; padding:40px; }
+ .left{ width:40%; text-align:center; }
+ .school{ font-size:26px; font-weight:600; color:#1D4ED8; }
+ .department{ margin-top:15px; font-size:20px; font-weight:600; color:#DC2626; }
+ .logo{ margin-top:30px; }
+ .logo img{ width:200px; }
+ .right{ width:60%; padding-left:30px; }
+ .title{ font-size:24px; font-weight:600; text-align:center; margin-bottom:40px; color:#1D4ED8; }
+ .card{ background:#D1FAE5; border-radius:20px; padding:30px; margin-bottom:30px; text-align:center; font-size:20px; color:#1F2937; box-shadow:0 6px 15px rgba(0,0,0,0.1); transition:0.3s; }
+ .data{ margin-top:15px; font-size:28px; font-weight:600; }
+ .warningBar{ width:100%; height:20px; background:#22c55e; border-radius:10px; margin-top:15px; transition:0.3s; }
+ .warningText{ margin-top:10px; font-weight:bold; }
+ .danger{ background:#ef4444 !important; color:white; }
+ #gas{color:#F97316;} #temp{color:#42E7F0;} #hum{color:#2563EB;}
+ #customAlert { display:none; position:fixed; top:20px; right:20px; background:#ef4444; color:white; padding:20px; border-radius:10px; z-index:9999; box-shadow:0 0 15px rgba(0,0,0,0.3); font-weight:bold; }
+ @media (max-width: 768px) {
+    .container { flex-direction: column; padding: 20px; }
+    .left, .right { width: 100%; padding: 0; }
+    .right { margin-top: 30px; }
+ }
+</style>
+</head>
+<body>
+<div id="customAlert"></div>
+<div class="container">
+<div class="left">
+<div class="school">HỌC VIỆN KỸ THUẬT VÀ CÔNG NGHỆ AN NINH</div>
+<div class="department">KHOA ĐIỆN TỬ VIỄN THÔNG VÀ<br>KỸ THUẬT NGHIỆP VỤ</div>
+<div class="logo"><img src="logo.png"></div>
+<button onclick="resetWifi()" style="margin-top:40px; padding:12px 20px; border:none; background:#f59e0b; color:white; font-size:16px; border-radius:10px; cursor:pointer; font-weight:bold; width:80%;">Đổi WiFi Hệ Thống</button>
+</div>
+<div class="right">
+<div class="title">
+    BẢNG ĐIỀU KHIỂN TRUNG TÂM
+    <span id="connMode" style="font-size:14px; padding:4px 10px; border-radius:20px; margin-left:10px; background:#6b7280; color:white; vertical-align:middle;">Đang kết nối...</span>
+</div>
+<div class="card" id="gasCard">Khí Gas<div class="data"><span id="gas">0</span> ppm</div><div class="warningText" id="gasStatus">An toàn</div><div class="warningBar" id="gasBar"></div></div>
+<div class="card" id="tempCard">Nhiệt độ<div class="data"><span id="temp">0</span> °C</div><div class="warningText" id="tempStatus">An toàn</div><div class="warningBar" id="tempBar"></div></div>
+<div class="card" id="humCard">Độ ẩm<div class="data"><span id="hum">0</span> %</div><div class="warningText" id="humStatus">An toàn</div><div class="warningBar" id="humBar"></div></div>
+</div>
+</div>
+
+<script>
+const BLYNK_TOKEN = "W7itSu8n_j__--i-XQuzPvbQQ17mpWUX"; 
+const BLYNK_API = `https://blynk.cloud/external/api/get?token=${BLYNK_TOKEN}&V0&V1&V2`;
+
+let gasWarning = 5000; 
+let tempWarning = 32; 
+let lastNotifyGas = 0;
+let lastNotifyTemp = 0;
+let lastNotifyHum = 0;
+const NOTIFY_COOLDOWN = 15000; 
+
+var gateway = `ws://${window.location.hostname}/ws`;
+var websocket;
+var blynkTimer = null;
+var isLocalConnected = false;
+var wsRetryCount = 0; 
+const MAX_WS_RETRIES = 5; 
+var currentPollingRate = 10000; 
+
+function updateConnectionModeUI(mode) {
+    let badge = document.getElementById("connMode");
+    if (mode === "local") {
+        badge.innerHTML = "● Nội bộ (Siêu tốc)";
+        badge.style.background = "#10b981";
+    } else if (mode === "remote") {
+        badge.innerHTML = "● Từ xa (Cloud API)";
+        badge.style.background = "#3b82f6";
+    } else {
+        badge.innerHTML = "● Mất kết nối";
+        badge.style.background = "#ef4444";
+    }
+}
+
+function initWebSocket() {
+    if (wsRetryCount >= MAX_WS_RETRIES) return; 
+    websocket = new WebSocket(gateway);
+    
+    websocket.onopen = function() {
+        isLocalConnected = true;
+        wsRetryCount = 0; 
+        updateConnectionModeUI("local");
+        if (blynkTimer) {
+            clearTimeout(blynkTimer);
+            blynkTimer = null;
+        }
+    };
+
+    websocket.onclose = function(e) {
+        isLocalConnected = false;
+        wsRetryCount++;
+        if (wsRetryCount === 1) { 
+            updateConnectionModeUI("remote");
+            layDuLieuTuBlynk(); 
+        }
+        setTimeout(initWebSocket, 3000); 
+    };
+    
+    websocket.onmessage = function(event) {
+        var data = JSON.parse(event.data);
+        capNhatGiaoDienTrungTam(data.gas, data.temp, data.hum);
+    };
+}
+
+function layDuLieuTuBlynk() {
+    if (isLocalConnected) return; 
+
+    fetch(BLYNK_API)
+        .then(response => response.json())
+        .then(data => {
+            let temp = parseFloat(data.V0);
+            let hum = parseFloat(data.V1);
+            let gas = parseFloat(data.V2);
+            
+            capNhatGiaoDienTrungTam(gas, temp, hum);
+            
+            if (gas > gasWarning || temp > tempWarning || hum < 40 || hum > 70) {
+                currentPollingRate = 2000; 
+            } else {
+                currentPollingRate = 10000; 
+            }
+            blynkTimer = setTimeout(layDuLieuTuBlynk, currentPollingRate);
+        })
+        .catch(error => {
+            updateConnectionModeUI("offline");
+            blynkTimer = setTimeout(layDuLieuTuBlynk, 10000); 
+        });
+}
+
+function capNhatGiaoDienTrungTam(gasValue, tempValue, humValue) {
+    let now = Date.now();
+    
+    document.getElementById("gas").innerHTML = gasValue.toFixed(1);
+    let gasCard = document.getElementById("gasCard");
+    let gasStatus = document.getElementById("gasStatus");
+    if(gasValue > gasWarning){
+        gasCard.classList.add("danger"); 
+        gasStatus.innerHTML = "NGUY HIỂM CẤP BÁCH"; 
+        if(now - lastNotifyGas > NOTIFY_COOLDOWN) {
+            showCustomAlert("Phát hiện nồng độ khí Gas vượt mức!");
+            lastNotifyGas = now;
+        }
+    } else {
+        gasCard.classList.remove("danger"); 
+        gasStatus.innerHTML = "An toàn";
+    }
+
+    document.getElementById("temp").innerHTML = tempValue.toFixed(1);
+    let tempCard = document.getElementById("tempCard");
+    let tempStatus = document.getElementById("tempStatus");
+    if(tempValue > tempWarning){
+        tempCard.classList.add("danger"); 
+        tempStatus.innerHTML = "CẢNH BÁO NHIỆT ĐỘ";
+        if(now - lastNotifyTemp > NOTIFY_COOLDOWN) {
+            showCustomAlert("Nhiệt độ phòng đang quá cao!");
+            lastNotifyTemp = now;
+        }
+    } else {
+        tempCard.classList.remove("danger"); 
+        tempStatus.innerHTML = "An toàn";
+    }
+
+    document.getElementById("hum").innerHTML = humValue.toFixed(1);
+    let humCard = document.getElementById("humCard");
+    let humStatus = document.getElementById("humStatus");
+    if(humValue < 40 || humValue > 70){
+        humCard.classList.add("danger"); 
+        humStatus.innerHTML = "CẢNH BÁO ĐỘ ẨM";
+        if(now - lastNotifyHum > NOTIFY_COOLDOWN) {
+            showCustomAlert("Độ ẩm vượt ngoài dải an toàn (40-70%)!");
+            lastNotifyHum = now;
+        }
+    } else {
+        humCard.classList.remove("danger"); 
+        humStatus.innerHTML = "An toàn";
+    }
+}
+
+function resetWifi(){
+    if(confirm("Bạn có chắc chắn muốn xóa WiFi cũ không?")) {
+        fetch("/resetwifi").then(()=>{
+            alert("Đã gửi lệnh xóa WiFi!\nHãy kết nối lại vào mạng ESP32_SETUP để cấu hình.");
+        });
+    }
+}
+
+function showCustomAlert(msg){
+    let alertBox = document.getElementById("customAlert");
+    alertBox.innerHTML = "⚠ " + msg;
+    alertBox.style.display = "block";
+    setTimeout(() => { alertBox.style.display = "none"; }, 5000);
+}
+
+window.addEventListener('load', initWebSocket);
+</script>
+</body>
+</html>
