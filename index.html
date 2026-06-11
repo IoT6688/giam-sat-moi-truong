@@ -41,7 +41,7 @@
 <div class="right">
 <div class="title">
     BẢNG ĐIỀU KHIỂN TRUNG TÂM
-    <span id="connMode" style="font-size:14px; padding:4px 10px; border-radius:20px; margin-left:10px; background:#6b7280; color:white; vertical-align:middle;">Đang kết nối...</span>
+    <span id="connMode" style="font-size:14px; padding:4px 10px; border-radius:20px; margin-left:10px; background:#6b7280; color:white; vertical-align:middle;">Đang định tuyến...</span>
 </div>
 <div class="card" id="gasCard">Khí Gas<div class="data"><span id="gas">0</span> ppm</div><div class="warningText" id="gasStatus">An toàn</div><div class="warningBar" id="gasBar"></div></div>
 <div class="card" id="tempCard">Nhiệt độ<div class="data"><span id="temp">0</span> °C</div><div class="warningText" id="tempStatus">An toàn</div><div class="warningBar" id="tempBar"></div></div>
@@ -60,13 +60,8 @@ let lastNotifyTemp = 0;
 let lastNotifyHum = 0;
 const NOTIFY_COOLDOWN = 15000; 
 
-var gateway = `ws://${window.location.hostname}/ws`;
-var websocket;
 var blynkTimer = null;
-var isLocalConnected = false;
-var wsRetryCount = 0; 
-const MAX_WS_RETRIES = 5; 
-var currentPollingRate = 10000; 
+var currentPollingRate = 2000; // Tốc độ quét khi dùng 4G/5G
 
 function updateConnectionModeUI(mode) {
     let badge = document.getElementById("connMode");
@@ -74,7 +69,7 @@ function updateConnectionModeUI(mode) {
         badge.innerHTML = "● Nội bộ (Siêu tốc)";
         badge.style.background = "#10b981";
     } else if (mode === "remote") {
-        badge.innerHTML = "● Từ xa (Cloud API)";
+        badge.innerHTML = "● 4G/5G (Blynk Cloud)";
         badge.style.background = "#3b82f6";
     } else {
         badge.innerHTML = "● Mất kết nối";
@@ -82,49 +77,10 @@ function updateConnectionModeUI(mode) {
     }
 }
 
-function initWebSocket() {
-    if (wsRetryCount >= MAX_WS_RETRIES) return; 
-    
-    // Đã bọc try...catch vào đây để chống Crash khi chạy trên GitHub Pages
-    try {
-        websocket = new WebSocket(gateway);
-        
-        websocket.onopen = function() {
-            isLocalConnected = true;
-            wsRetryCount = 0; 
-            updateConnectionModeUI("local");
-            if (blynkTimer) {
-                clearTimeout(blynkTimer);
-                blynkTimer = null;
-            }
-        };
-
-        websocket.onclose = function(e) {
-            isLocalConnected = false;
-            wsRetryCount++;
-            if (wsRetryCount === 1) { 
-                updateConnectionModeUI("remote");
-                layDuLieuTuBlynk(); 
-            }
-            setTimeout(initWebSocket, 3000); 
-        };
-        
-        websocket.onmessage = function(event) {
-            var data = JSON.parse(event.data);
-            capNhatGiaoDienTrungTam(data.gas, data.temp, data.hum);
-        };
-    } catch (error) {
-        // Lập tức nhảy vào đây nếu trình duyệt HTTPS chặn WebSocket ws://
-        console.warn("Môi trường HTTPS chặn WebSocket nội bộ. Kích hoạt chuyển nguồn Cloud Blynk...");
-        wsRetryCount = MAX_WS_RETRIES; // Ép dừng vòng lặp tìm WebSocket nội bộ
-        updateConnectionModeUI("remote");
-        layDuLieuTuBlynk(); // Gọi API rút dữ liệu từ đám mây ngay lập tức
-    }
-}
-
+// ==========================================
+// LUỒNG 1: XỬ LÝ DÀNH CHO MẠNG NGOÀI (4G/5G)
+// ==========================================
 function layDuLieuTuBlynk() {
-    if (isLocalConnected) return; 
-
     fetch(BLYNK_API)
         .then(response => response.json())
         .then(data => {
@@ -134,19 +90,65 @@ function layDuLieuTuBlynk() {
             
             capNhatGiaoDienTrungTam(gas, temp, hum);
             
+            // Ép tốc độ quét thông minh
             if (gas > gasWarning || temp > tempWarning || hum < 40 || hum > 70) {
-                currentPollingRate = 2000; 
+                currentPollingRate = 1500; // Có biến -> quét nhanh
             } else {
-                currentPollingRate = 10000; 
+                currentPollingRate = 3000; // An toàn -> giãn cách để tránh khóa IP
             }
             blynkTimer = setTimeout(layDuLieuTuBlynk, currentPollingRate);
         })
         .catch(error => {
             updateConnectionModeUI("offline");
-            blynkTimer = setTimeout(layDuLieuTuBlynk, 10000); 
+            blynkTimer = setTimeout(layDuLieuTuBlynk, 5000); 
         });
 }
 
+// ==========================================
+// LUỒNG 2: XỬ LÝ DÀNH CHO WIFI NỘI BỘ MẠCH
+// ==========================================
+function initWebSocket(hostIP) {
+    var gateway = `ws://${hostIP}/ws`;
+    var websocket = new WebSocket(gateway);
+    
+    websocket.onopen = function() {
+        updateConnectionModeUI("local");
+    };
+
+    websocket.onclose = function() {
+        updateConnectionModeUI("offline");
+        setTimeout(() => initWebSocket(hostIP), 3000); 
+    };
+    
+    websocket.onmessage = function(event) {
+        var data = JSON.parse(event.data);
+        capNhatGiaoDienTrungTam(data.gas, data.temp, data.hum);
+    };
+}
+
+// ==========================================
+// BỘ ĐỊNH TUYẾN: KIỂM TRA MÔI TRƯỜNG THỰC THI
+// ==========================================
+function khoiDongHeThong() {
+    let proto = window.location.protocol;
+    let host = window.location.hostname;
+
+    // Phân tích: Nếu mở web trực tiếp bằng WiFi mạch thì protocol là 'http:' và host là một dãy IP (VD: 192.168.1.50)
+    if (proto === "http:" && host !== "" && host !== "localhost") {
+        console.log("Phân luồng: Mạng nội bộ -> Chạy WebSocket");
+        updateConnectionModeUI("local");
+        initWebSocket(host); 
+    } else {
+        // Phân tích: Nếu mở từ GitHub (https:), dùng 4G/5G, hoặc tải file về đt (file:)
+        console.log("Phân luồng: Mạng 4G/5G từ xa -> Chạy Blynk Cloud");
+        updateConnectionModeUI("remote");
+        layDuLieuTuBlynk(); // Cấm WebSocket chạy, trực tiếp gọi API
+    }
+}
+
+// ==========================================
+// HIỂN THỊ GIAO DIỆN
+// ==========================================
 function capNhatGiaoDienTrungTam(gasValue, tempValue, humValue) {
     let now = Date.now();
     
@@ -196,6 +198,14 @@ function capNhatGiaoDienTrungTam(gasValue, tempValue, humValue) {
     }
 }
 
+function resetWifi(){
+    if(confirm("Bạn có chắc chắn muốn xóa WiFi cũ không?")) {
+        fetch("/resetwifi").then(()=>{
+            alert("Đã gửi lệnh xóa WiFi!\nHãy kết nối lại vào mạng ESP32_SETUP để cấu hình.");
+        });
+    }
+}
+
 function showCustomAlert(msg){
     let alertBox = document.getElementById("customAlert");
     alertBox.innerHTML = "⚠ " + msg;
@@ -203,7 +213,8 @@ function showCustomAlert(msg){
     setTimeout(() => { alertBox.style.display = "none"; }, 5000);
 }
 
-window.addEventListener('load', initWebSocket);
+// Bắt đầu định tuyến ngay khi vừa load web
+window.addEventListener('load', khoiDongHeThong);
 </script>
 </body>
 </html>
