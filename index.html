@@ -36,11 +36,12 @@
 <div class="school">HỌC VIỆN KỸ THUẬT VÀ CÔNG NGHỆ AN NINH</div>
 <div class="department">KHOA ĐIỆN TỬ VIỄN THÔNG VÀ<br>KỸ THUẬT NGHIỆP VỤ</div>
 <div class="logo"><img src="logo.png"></div>
+<button onclick="resetWifi()" style="margin-top:40px; padding:12px 20px; border:none; background:#f59e0b; color:white; font-size:16px; border-radius:10px; cursor:pointer; font-weight:bold; width:80%;">Đổi WiFi Hệ Thống</button>
 </div>
 <div class="right">
 <div class="title">
     BẢNG ĐIỀU KHIỂN TRUNG TÂM
-    <span id="connMode" style="font-size:14px; padding:4px 10px; border-radius:20px; margin-left:10px; background:#6b7280; color:white; vertical-align:middle;">Đang định tuyến...</span>
+    <span id="connMode" style="font-size:14px; padding:4px 10px; border-radius:20px; margin-left:10px; background:#6b7280; color:white; vertical-align:middle; transition:0.3s;">Đang định tuyến...</span>
 </div>
 <div class="card" id="gasCard">Khí Gas<div class="data"><span id="gas">0</span> ppm</div><div class="warningText" id="gasStatus">An toàn</div><div class="warningBar" id="gasBar"></div></div>
 <div class="card" id="tempCard">Nhiệt độ<div class="data"><span id="temp">0</span> °C</div><div class="warningText" id="tempStatus">An toàn</div><div class="warningBar" id="tempBar"></div></div>
@@ -50,7 +51,8 @@
 
 <script>
 const BLYNK_TOKEN = "W7itSu8n_j__--i-XQuzPvbQQ17mpWUX"; 
-const BLYNK_API = `https://blynk.cloud/external/api/get?token=${BLYNK_TOKEN}&V0&V1&V2`;
+// Cập nhật: Thêm V3 vào API để tải IP nội bộ
+const BLYNK_API = `https://blynk.cloud/external/api/get?token=${BLYNK_TOKEN}&V0&V1&V2&V3`;
 
 let gasWarning = 5000; 
 let tempWarning = 32; 
@@ -60,19 +62,25 @@ let lastNotifyHum = 0;
 const NOTIFY_COOLDOWN = 15000; 
 
 var blynkTimer = null;
-var currentPollingRate = 2000; // Tốc độ quét khi dùng 4G/5G
+var currentPollingRate = 2000; 
 
 function updateConnectionModeUI(mode) {
     let badge = document.getElementById("connMode");
     if (mode === "local") {
         badge.innerHTML = "● Nội bộ (Siêu tốc)";
         badge.style.background = "#10b981";
+        badge.style.cursor = "default";
+        badge.onclick = null;
     } else if (mode === "remote") {
         badge.innerHTML = "● 4G/5G (Blynk Cloud)";
         badge.style.background = "#3b82f6";
+        badge.style.cursor = "default";
+        badge.onclick = null;
     } else {
         badge.innerHTML = "● Mất kết nối";
         badge.style.background = "#ef4444";
+        badge.style.cursor = "default";
+        badge.onclick = null;
     }
 }
 
@@ -88,12 +96,26 @@ function layDuLieuTuBlynk() {
             let gas = parseFloat(data.V2);
             
             capNhatGiaoDienTrungTam(gas, temp, hum);
+
+            // LOGIC MỚI: Xử lý định tuyến IP từ V3
+            let localIP = data.V3;
+            let badge = document.getElementById("connMode");
             
-            // Ép tốc độ quét thông minh
-            if (gas > gasWarning || temp > tempWarning || hum < 40 || hum > 70) {
-                currentPollingRate = 1500; // Có biến -> quét nhanh
+            if (localIP && localIP !== "offline" && localIP.trim() !== "") {
+                badge.innerHTML = `● 4G/5G. Chuyển sang mạng nội bộ tại ${localIP}`;
+                badge.style.background = "#8b5cf6"; // Màu tím nổi bật báo hiệu có thể click
+                badge.style.cursor = "pointer";
+                badge.onclick = function() {
+                    window.location.href = `http://${localIP}/dashboard`;
+                };
             } else {
-                currentPollingRate = 3000; // An toàn -> giãn cách để tránh khóa IP
+                updateConnectionModeUI("remote");
+            }
+            
+            if (gas > gasWarning || temp > tempWarning || hum < 40 || hum > 70) {
+                currentPollingRate = 1500; 
+            } else {
+                currentPollingRate = 3000; 
             }
             blynkTimer = setTimeout(layDuLieuTuBlynk, currentPollingRate);
         })
@@ -132,16 +154,13 @@ function khoiDongHeThong() {
     let proto = window.location.protocol;
     let host = window.location.hostname;
 
-    // Phân tích: Nếu mở web trực tiếp bằng WiFi mạch thì protocol là 'http:' và host là một dãy IP (VD: 192.168.1.50)
     if (proto === "http:" && host !== "" && host !== "localhost") {
         console.log("Phân luồng: Mạng nội bộ -> Chạy WebSocket");
-        updateConnectionModeUI("local");
         initWebSocket(host); 
     } else {
-        // Phân tích: Nếu mở từ GitHub (https:), dùng 4G/5G, hoặc tải file về đt (file:)
         console.log("Phân luồng: Mạng 4G/5G từ xa -> Chạy Blynk Cloud");
         updateConnectionModeUI("remote");
-        layDuLieuTuBlynk(); // Cấm WebSocket chạy, trực tiếp gọi API
+        layDuLieuTuBlynk(); 
     }
 }
 
@@ -212,7 +231,6 @@ function showCustomAlert(msg){
     setTimeout(() => { alertBox.style.display = "none"; }, 5000);
 }
 
-// Bắt đầu định tuyến ngay khi vừa load web
 window.addEventListener('load', khoiDongHeThong);
 </script>
 </body>
