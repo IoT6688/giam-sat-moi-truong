@@ -51,8 +51,7 @@
 
 <script>
 const BLYNK_TOKEN = "W7itSu8n_j__--i-XQuzPvbQQ17mpWUX"; 
-// Cập nhật: Thêm V3 vào API để tải IP nội bộ
-const BLYNK_API = `https://blynk.cloud/external/api/get?token=${BLYNK_TOKEN}&V0&V1&V2&V3`;
+const BLYNK_API = `https://blynk.cloud/external/api/get?token=${BLYNK_TOKEN}&V0&V1&V2&V5`;
 
 let gasWarning = 5000; 
 let tempWarning = 32; 
@@ -84,9 +83,6 @@ function updateConnectionModeUI(mode) {
     }
 }
 
-// ==========================================
-// LUỒNG 1: XỬ LÝ DÀNH CHO MẠNG NGOÀI (4G/5G)
-// ==========================================
 function layDuLieuTuBlynk() {
     fetch(BLYNK_API)
         .then(response => response.json())
@@ -97,13 +93,13 @@ function layDuLieuTuBlynk() {
             
             capNhatGiaoDienTrungTam(gas, temp, hum);
 
-            // LOGIC MỚI: Xử lý định tuyến IP từ V3
-            let localIP = data.V3;
+            // Xử lý IP nội bộ từ chân V5
+            let localIP = data.V5;
             let badge = document.getElementById("connMode");
             
             if (localIP && localIP !== "offline" && localIP.trim() !== "") {
-                badge.innerHTML = `● 4G/5G. Chuyển sang mạng nội bộ tại ${localIP}`;
-                badge.style.background = "#8b5cf6"; // Màu tím nổi bật báo hiệu có thể click
+                badge.innerHTML = `● Chuyển sang mạng nội bộ tại ${localIP}`;
+                badge.style.background = "#8b5cf6"; 
                 badge.style.cursor = "pointer";
                 badge.onclick = function() {
                     window.location.href = `http://${localIP}/dashboard`;
@@ -125,48 +121,33 @@ function layDuLieuTuBlynk() {
         });
 }
 
-// ==========================================
-// LUỒNG 2: XỬ LÝ DÀNH CHO WIFI NỘI BỘ MẠCH
-// ==========================================
 function initWebSocket(hostIP) {
     var gateway = `ws://${hostIP}/ws`;
     var websocket = new WebSocket(gateway);
     
-    websocket.onopen = function() {
-        updateConnectionModeUI("local");
-    };
-
+    websocket.onopen = function() { updateConnectionModeUI("local"); };
     websocket.onclose = function() {
         updateConnectionModeUI("offline");
         setTimeout(() => initWebSocket(hostIP), 3000); 
     };
-    
     websocket.onmessage = function(event) {
         var data = JSON.parse(event.data);
         capNhatGiaoDienTrungTam(data.gas, data.temp, data.hum);
     };
 }
 
-// ==========================================
-// BỘ ĐỊNH TUYẾN: KIỂM TRA MÔI TRƯỜNG THỰC THI
-// ==========================================
 function khoiDongHeThong() {
     let proto = window.location.protocol;
     let host = window.location.hostname;
 
     if (proto === "http:" && host !== "" && host !== "localhost") {
-        console.log("Phân luồng: Mạng nội bộ -> Chạy WebSocket");
         initWebSocket(host); 
     } else {
-        console.log("Phân luồng: Mạng 4G/5G từ xa -> Chạy Blynk Cloud");
         updateConnectionModeUI("remote");
         layDuLieuTuBlynk(); 
     }
 }
 
-// ==========================================
-// HIỂN THỊ GIAO DIỆN
-// ==========================================
 function capNhatGiaoDienTrungTam(gasValue, tempValue, humValue) {
     let now = Date.now();
     
